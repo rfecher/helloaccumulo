@@ -1,147 +1,120 @@
 package org.fecher;
 
+import java.nio.charset.Charset;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.accumulo.core.client.AccumuloException;
+import org.apache.accumulo.core.client.AccumuloSecurityException;
+import org.apache.accumulo.core.client.BatchWriter;
+import org.apache.accumulo.core.client.BatchWriterConfig;
+import org.apache.accumulo.core.client.Connector;
+import org.apache.accumulo.core.client.Instance;
+import org.apache.accumulo.core.client.TableExistsException;
+import org.apache.accumulo.core.client.TableNotFoundException;
+import org.apache.accumulo.core.client.ZooKeeperInstance;
+import org.apache.accumulo.core.data.Mutation;
+import org.apache.accumulo.core.data.Value;
+import org.apache.commons.cli.BasicParser;
+import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.HelpFormatter;
-import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
+import org.apache.commons.cli.ParseException;
+import org.apache.commons.cli.Parser;
+import org.apache.hadoop.io.Text;
 import org.apache.log4j.Logger;
 
-public class HelloAccumulo {
+public class HelloAccumulo
+{
 	private final static Logger LOGGER = Logger.getLogger(HelloAccumulo.class);
-	public static void main(String[] args) {
+	private static final int DEFAULT_NUM_THREADS = 16;
+	private static final long DEFAULT_TIMEOUT_MILLIS = 1000L; // 1 second
+	private static final long DEFAULT_BYTE_BUFFER_SIZE = 1048576L; // 1 MB
 
-		final Options operations = new Options();
-		applyOptions(operations);
+	public static void main(
+			final String[] args ) {
+
+		final Options accumuloOptions = new Options();
+		AccumuloCommandLineOptions.applyOptions(accumuloOptions);
 		if (args.length < 1) {
 			final HelpFormatter help = new HelpFormatter();
 			help.printHelp(
 					"<options>",
 					"\nOtions:",
-					operations,
+					accumuloOptions,
 					"\nOptions are similar to geowave-ingest.");
 			System.exit(-1);
 		}
-		final String[] optionsArgs = new String[args.length - 1];
-		System.arraycopy(
-				args,
-				1,
-				optionsArgs,
-				0,
-				optionsArgs.length);
-		final String[] operationsArgs = new String[] {
-			args[0]
-		};
 		final Parser parser = new BasicParser();
-		CommandLine operationCommandLine;
+		CommandLine optionCommandLine;
 		try {
-			operationCommandLine = parser.parse(
-					operations,
-					operationsArgs);
-			final OperationCommandLineOptions operationOption = OperationCommandLineOptions.parseOptions(operationCommandLine);
-			operationOption.getOperation().getDriver().run(
-					optionsArgs);
+			optionCommandLine = parser.parse(
+					accumuloOptions,
+					args);
+			final AccumuloCommandLineOptions accumuloOption = AccumuloCommandLineOptions.parseOptions(optionCommandLine);
+			System.out.println("Attempting to connect to zookeeper");
+
+			final Instance inst = new ZooKeeperInstance(
+					accumuloOption.getInstanceId(),
+					accumuloOption.getZookeepers());
+			final Connector connector = inst.getConnector(
+					accumuloOption.getUser(),
+					accumuloOption.getPassword());
+			System.out.println("Got zookeeper connection");
+			if (accumuloOption.isClearNamespace()) {
+				System.out.println("Attempting to delete table '" + accumuloOption.getNamespace() + "'");
+				if (connector.tableOperations().exists(
+						accumuloOption.getNamespace())) {
+					connector.tableOperations().delete(
+							accumuloOption.getNamespace());
+					System.out.println("Deleted table successfully");
+				}
+				else {
+					System.out.println("Table doesn't exist");
+				}
+			}
+			else {
+				if (connector.tableOperations().exists(
+						accumuloOption.getNamespace())) {
+					System.out.println("Table '" + accumuloOption.getNamespace() + "' exists");
+				}
+				else {
+					System.out.println("Table '" + accumuloOption.getNamespace() + "' doesn't exist, creating table");
+					connector.tableOperations().create(
+							accumuloOption.getNamespace());
+					System.out.println("Table created successfully");
+				}
+				System.out.println("Creating BatchWriter");
+				final BatchWriter writer = connector.createBatchWriter(
+						accumuloOption.getNamespace(),
+						new BatchWriterConfig().setMaxWriteThreads(
+								DEFAULT_NUM_THREADS).setMaxMemory(
+								DEFAULT_BYTE_BUFFER_SIZE).setTimeout(
+								DEFAULT_TIMEOUT_MILLIS,
+								TimeUnit.MILLISECONDS));
+				System.out.println("BatchWriter created");
+				final Mutation testMutation = new Mutation(
+						new Text(
+								"Test Row"));
+				testMutation.put(
+						new Text(
+								"Test Column Family"),
+						new Text(
+								"Test Column Qualifier"),
+						new Value(
+								"Test Value".getBytes(Charset.forName("UTF-8"))));
+
+				System.out.println("adding test mutation");
+				writer.addMutation(testMutation);
+				System.out.println("flushing batch writer");
+				writer.flush();
+				System.out.println("closing batch writer");
+				writer.close();
+			}
 		}
-		catch (final ParseException e) {
+		catch (ParseException | AccumuloException | AccumuloSecurityException | TableNotFoundException | TableExistsException e) {
 			LOGGER.fatal(
-					"Unable to parse operation",
+					"Exception while parsing or running hello accumulo",
 					e);
 		}
-	}
-	public static AccumuloCommandLineOptions parseOptions(
-			final CommandLine commandLine )
-			throws ParseException {
-		boolean success = true;
-		final String zookeepers = commandLine.getOptionValue("z");
-		final String instanceId = commandLine.getOptionValue("i");
-		final String user = commandLine.getOptionValue("u");
-		final String password = commandLine.getOptionValue("p");
-		boolean clearNamespace = false;
-		if (commandLine.hasOption("c")) {
-			clearNamespace = true;
-		}
-		String visibility = null;
-		if (commandLine.hasOption("v")) {
-			visibility = commandLine.getOptionValue("v");
-		}
-		final String namespace = commandLine.getOptionValue(
-				"n",
-				"");
-		if (zookeepers == null) {
-			success = false;
-			LOGGER.fatal("Zookeeper URL not set");
-		}
-		if (instanceId == null) {
-			success = false;
-			LOGGER.fatal("Accumulo instance ID not set");
-		}
-		if (user == null) {
-			success = false;
-			LOGGER.fatal("Accumulo user ID not set");
-		}
-		if (password == null) {
-			success = false;
-			LOGGER.fatal("Accumulo password not set");
-		}
-		if (!success) {
-			throw new ParseException(
-					"Required option is missing");
-		}
-		try {
-			return new AccumuloCommandLineOptions(
-					zookeepers,
-					instanceId,
-					user,
-					password,
-					namespace,
-					visibility,
-					clearNamespace,
-					type);
-		}
-		catch (AccumuloException | AccumuloSecurityException e) {
-			LOGGER.fatal(
-					"Unable to connect to Accumulo with the specified options",
-					e);
-		}
-		return null;
-	}
-
-	public static void applyOptions(
-			final Options allOptions ) {
-		final Option zookeeperUrl = new Option(
-				"z",
-				"zookeepers",
-				true,
-				"A comma-separated list of zookeeper servers that an Accumulo instance is using");
-		allOptions.addOption(zookeeperUrl);
-		final Option instanceId = new Option(
-				"i",
-				"instance-id",
-				true,
-				"The Accumulo instance ID");
-		allOptions.addOption(instanceId);
-		final Option user = new Option(
-				"u",
-				"user",
-				true,
-				"A valid Accumulo user ID");
-		allOptions.addOption(user);
-		final Option password = new Option(
-				"p",
-				"password",
-				true,
-				"The password for the user");
-		allOptions.addOption(password);
-		final Option visibility = new Option(
-				"v",
-				"visibility",
-				true,
-				"The visiblity of the data ingested (optional; default is 'public')");
-		allOptions.addOption(visibility);
-
-		final Option namespace = new Option(
-				"n",
-				"namespace",
-				true,
-				"The table namespace (optional; default is no namespace)");
-		allOptions.addOption(namespace);
 	}
 }
