@@ -51,15 +51,16 @@ public class HelloAccumulo
 					accumuloOptions,
 					args);
 			final AccumuloCommandLineOptions accumuloOption = AccumuloCommandLineOptions.parseOptions(optionCommandLine);
-			System.out.println("Attempting to connect to zookeeper");
+			System.out.println("Attempting to get zookeeper instance");
 
 			final Instance inst = new ZooKeeperInstance(
 					accumuloOption.getInstanceId(),
 					accumuloOption.getZookeepers());
+			System.out.println("Attempting to get accumulo connector");
 			final Connector connector = inst.getConnector(
 					accumuloOption.getUser(),
 					accumuloOption.getPassword());
-			System.out.println("Got zookeeper connection");
+			System.out.println("Got successful connection to accumulo ");
 			if (accumuloOption.isClearNamespace()) {
 				System.out.println("Attempting to delete table '" + accumuloOption.getNamespace() + "'");
 				if (connector.tableOperations().exists(
